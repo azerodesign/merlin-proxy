@@ -5,6 +5,7 @@ import requests
 import re
 from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from dotenv import load_dotenv
@@ -17,33 +18,30 @@ app = FastAPI(
     version="2.0.0"
 )
 
+# =============== CORS ===============
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # =============== KONFIGURASI ===============
 AUTH_TOKEN = os.getenv("AUTH_TOKEN", "")
 MERLIN_API_URL = os.getenv("MERLIN_API_URL", "https://www.getmerlin.in/arcane/api/v2/thread/unified")
 MERLIN_EMAIL = os.getenv("MERLIN_EMAIL", "")
 MERLIN_PASSWORD = os.getenv("MERLIN_PASSWORD", "")
 FIREBASE_API_KEY = os.getenv("FIREBASE_API_KEY", "")
-
-# =============== API KEY STATIS ===============
-# Gunakan key dari environment, atau default key yang diberikan
 PROXY_API_KEY = os.getenv("PROXY_API_KEY", "sk-9894908a-3827-446c-9769-cde7065b5b68")
 
-# Tampilkan API key di log saat startup (agar terlihat di Railway logs)
+# Tampilkan API key di log startup (untuk Railway)
 print("=" * 60)
-print("🔐 PROXY API KEY (gunakan ini untuk autentikasi):")
+print("🔐 PROXY API KEY (gunakan untuk autentikasi):")
 print(f"   {PROXY_API_KEY}")
 print("=" * 60)
-print("📌 Cara pakai: kirim header 'X-API-Key: <key>' pada setiap request")
+print("📌 Cara pakai: kirim header 'X-API-Key' atau 'Authorization: Bearer <key>'")
 print("=" * 60)
-
-# Fungsi validasi API key
-def verify_api_key(api_key: str = Header(None, alias="X-API-Key")):
-    if not api_key:
-        raise HTTPException(status_code=401, detail="X-API-Key header required")
-    if api_key != PROXY_API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid API Key")
-    return api_key
-# ===========================================
 
 BASE_HEADERS = {
     "Content-Type": "application/json",
@@ -53,6 +51,63 @@ BASE_HEADERS = {
     "Origin": "https://www.getmerlin.in",
     "Referer": "https://www.getmerlin.in/id/chat"
 }
+
+# =============== MODEL ===============
+# Daftar model yang tersedia (dari model.py)
+AVAILABLE_MODELS = [
+    "gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4-turbo", "gpt-3.5-turbo",
+    "o1-mini", "o3-mini",
+    "claude-4.8-opus", "claude-4.7-opus", "claude-4.6-opus", "claude-4.6-sonnet",
+    "claude-4.5-haiku", "claude-3.7-sonnet", "claude-3.5-sonnet",
+    "claude-3-opus", "claude-3-sonnet", "claude-3-haiku",
+    "gemini-3.5-flash", "gemini-3.1-pro", "gemini-3.1-flash-lite",
+    "gemini-2.5-flash-lite", "gemini-2.5-pro", "gemini-2.5-flash",
+    "gemini-2.0-pro", "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash",
+    "grok-4.3", "grok-3",
+    "deepseek-chat",
+    "glm-5.1",
+    "minimax-m2.7", "minimax-m2.5"
+]
+
+MODEL_MAP = {
+    "gpt-4o": "claude-4.8-opus",
+    "gpt-4o-mini": "claude-4.8-opus",
+    "gpt-4.1": "claude-4.8-opus",
+    "gpt-4-turbo": "claude-4.8-opus",
+    "gpt-3.5-turbo": "claude-4.8-opus",
+    "o1-mini": "claude-4.8-opus",
+    "o3-mini": "claude-4.8-opus",
+    "claude-4.8-opus": "claude-4.8-opus",
+    "claude-4.7-opus": "claude-4.7-opus",
+    "claude-4.6-opus": "claude-4.6-opus",
+    "claude-4.6-sonnet": "claude-4.6-sonnet",
+    "claude-4.5-haiku": "claude-4.5-haiku",
+    "claude-3.7-sonnet": "claude-3.7-sonnet",
+    "claude-3.5-sonnet": "claude-3.5-sonnet",
+    "claude-3-opus": "claude-3-opus",
+    "claude-3-sonnet": "claude-3-sonnet",
+    "claude-3-haiku": "claude-3-haiku",
+    "gemini-3.5-flash": "gemini-3.5-flash",
+    "gemini-3.1-pro": "gemini-3.1-pro",
+    "gemini-3.1-flash-lite": "gemini-3.1-flash-lite",
+    "gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
+    "gemini-2.5-pro": "gemini-2.5-pro",
+    "gemini-2.5-flash": "gemini-2.5-flash",
+    "gemini-2.0-pro": "gemini-2.0-pro",
+    "gemini-2.0-flash": "gemini-2.0-flash",
+    "gemini-1.5-pro": "gemini-1.5-pro",
+    "gemini-1.5-flash": "gemini-1.5-flash",
+    "grok-4.3": "grok-4.3",
+    "grok-3": "grok-3",
+    "deepseek-chat": "deepseek-chat",
+    "glm-5.1": "glm-5.1",
+    "minimax-m2.7": "minimax-m2.7",
+    "minimax-m2.5": "minimax-m2.5",
+}
+
+def get_merlin_model(user_model: str) -> str:
+    return MODEL_MAP.get(user_model, "claude-4.8-opus")
+# ===========================================
 
 class Message(BaseModel):
     role: str
@@ -64,6 +119,24 @@ class ChatCompletionRequest(BaseModel):
     temperature: Optional[float] = 0.7
     max_tokens: Optional[int] = 1000
     stream: Optional[bool] = False
+
+# =============== AUTH ===============
+def verify_api_key(authorization: Optional[str] = Header(None), x_api_key: Optional[str] = Header(None, alias="X-API-Key")):
+    # Coba dari Authorization: Bearer <key>
+    api_key = None
+    if authorization and authorization.startswith("Bearer "):
+        api_key = authorization[7:]
+    elif x_api_key:
+        api_key = x_api_key
+    
+    if not api_key:
+        raise HTTPException(status_code=401, detail="API Key required. Provide 'Authorization: Bearer <key>' or 'X-API-Key: <key>' header")
+    
+    if api_key != PROXY_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API Key")
+    
+    return api_key
+# ===========================================
 
 def generate_uuid():
     return str(uuid.uuid4())
@@ -102,20 +175,10 @@ def get_headers_with_token(token=None):
 def build_merlin_payload(openai_req: ChatCompletionRequest) -> Dict[str, Any]:
     user_messages = [m for m in openai_req.messages if m.role == "user"]
     last_user_msg = user_messages[-1] if user_messages else openai_req.messages[-1]
-    
-    # Mapping model (bisa diambil dari model.py, tapi di sini sederhana)
-    model_map = {
-        "gpt-4o": "claude-4.8-opus",
-        "gpt-4": "claude-4.8-opus",
-        "claude-3.5-sonnet": "claude-4.8-opus",
-        "claude-4.8-opus": "claude-4.8-opus"
-    }
-    merlin_model = model_map.get(openai_req.model, "claude-4.8-opus")
-    
+    merlin_model = get_merlin_model(openai_req.model)
     chat_id = generate_uuid()
     message_id = generate_uuid()
     child_id = generate_uuid()
-    
     return {
         "attachments": [],
         "chatId": chat_id,
@@ -177,7 +240,6 @@ def call_merlin_with_retry(payload, token, max_retries=2):
                 if new_token:
                     AUTH_TOKEN = new_token
                     token = new_token
-                    # Simpan ke .env
                     try:
                         with open('.env', 'r') as f:
                             lines = f.readlines()
@@ -198,11 +260,30 @@ def call_merlin_with_retry(payload, token, max_retries=2):
             raise e
     raise HTTPException(status_code=502, detail="Gagal hubungi Merlin")
 
+# =============== ENDPOINTS ===============
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+@app.get("/v1/models")
+async def list_models(auth: str = Depends(verify_api_key)):
+    """Endpoint untuk list model (OpenAI compatible)"""
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": model_id,
+                "object": "model",
+                "created": 1700000000,
+                "owned_by": "merlin-proxy"
+            }
+            for model_id in AVAILABLE_MODELS
+        ]
+    }
+
 @app.post("/v1/chat/completions")
-async def chat_completions(
-    body: ChatCompletionRequest,
-    auth: str = Depends(verify_api_key)  # <-- API Key authentication
-):
+async def chat_completions(body: ChatCompletionRequest, auth: str = Depends(verify_api_key)):
     payload = build_merlin_payload(body)
     print("📤 Payload:", json.dumps(payload, indent=2)[:500])
     
@@ -213,18 +294,40 @@ async def chat_completions(
     if not content:
         content = "Maaf, saya tidak dapat memproses permintaan Anda."
     
-    return JSONResponse(content={
-        "choices": [{
-            "message": {"role": "assistant", "content": content},
-            "finish_reason": "stop",
-            "index": 0
-        }],
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    })
+    return {
+        "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+        "object": "chat.completion",
+        "created": int(uuid.uuid4().time_low),
+        "model": body.model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": content
+                },
+                "finish_reason": "stop"
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+        }
+    }
 
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
+# =============== ROOT ===============
+@app.get("/")
+async def root():
+    return {
+        "message": "Merlin Proxy is running",
+        "endpoints": {
+            "health": "/health",
+            "models": "/v1/models",
+            "chat": "/v1/chat/completions"
+        },
+        "auth": "API Key required (Bearer token or X-API-Key header)"
+    }
 
 if __name__ == "__main__":
     import uvicorn
