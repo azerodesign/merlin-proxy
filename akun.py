@@ -5,11 +5,6 @@ ACCOUNTS = [
         "proxy": None
     },
     {
-        "email": "5mxr2t@azerostore.my.id",
-        "password": "Masuk123#",
-        "proxy": None
-    },
-    {
         "email": "71xl12@azerostore.my.id",
         "password": "Masuk123#",
         "proxy": None
