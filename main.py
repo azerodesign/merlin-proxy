@@ -3,8 +3,7 @@ import json
 import uuid
 import time
 import re
-import asyncio
-from typing import List, Optional, Dict, Any, AsyncGenerator
+from typing import List, Optional, Dict, Any
 
 import requests
 from fastapi import FastAPI, HTTPException, Depends, Header
@@ -17,8 +16,8 @@ load_dotenv()
 
 app = FastAPI(
     title="Merlin Proxy",
-    description="OpenAI-compatible proxy for Merlin AI",
-    version="2.0.0"
+    description="OpenAI-compatible proxy for Merlin AI (with Tools support for Hermes)",
+    version="2.1.0"
 )
 
 # =============== CORS ===============
@@ -104,6 +103,8 @@ class ChatCompletionRequest(BaseModel):
     temperature: Optional[float] = 0.7
     max_tokens: Optional[int] = 1000
     stream: Optional[bool] = False
+    tools: Optional[List[Dict[str, Any]]] = None          # <-- Tools dari Hermes
+    tool_choice: Optional[Dict[str, Any]] = None          # <-- Tool choice
 
 # =============== MERLIN FUNCTIONS ===============
 def generate_uuid():
@@ -136,16 +137,57 @@ def get_headers_with_token(token=None):
         headers["Authorization"] = f"Bearer {t}"
     return headers
 
+def inject_tools_into_prompt(content: str, tools: List[Dict[str, Any]]) -> str:
+    """Tambahkan deskripsi tools ke dalam prompt user"""
+    if not tools:
+        return content
+    
+    tools_desc = "\n\n--- TOOLS YANG TERSEDIA ---\n"
+    for tool in tools:
+        if tool.get("type") == "function":
+            func = tool.get("function", {})
+            tools_desc += f"\n- Nama: {func.get('name')}\n"
+            tools_desc += f"  Deskripsi: {func.get('description', 'Tidak ada deskripsi')}\n"
+            parameters = func.get('parameters', {})
+            if parameters:
+                tools_desc += f"  Parameter: {json.dumps(parameters, indent=2, ensure_ascii=False)}\n"
+    
+    tools_desc += "\n--- INSTRUKSI ---\n"
+    tools_desc += "Jika kamu membutuhkan tool, jawab dengan format JSON:\n"
+    tools_desc += '{"tool_calls": [{"function": {"name": "nama_tool", "arguments": {...}}}]}\n'
+    tools_desc += "Jika tidak, jawab seperti biasa.\n"
+    
+    return content + tools_desc
+
 def build_merlin_payload(req: ChatCompletionRequest) -> Dict[str, Any]:
     user_msgs = [m for m in req.messages if m.role == "user"]
-    last = user_msgs[-1] if user_msgs else req.messages[-1]
+    system_msgs = [m for m in req.messages if m.role == "system"]
+    
+    if not user_msgs:
+        # fallback ke pesan terakhir
+        last = req.messages[-1]
+        content = last.content
+    else:
+        last = user_msgs[-1]
+        content = last.content
+    
+    # Inject tools ke content user
+    if req.tools:
+        content = inject_tools_into_prompt(content, req.tools)
+    
+    # Gabungkan system message jika ada
+    full_prompt = content
+    if system_msgs:
+        system_content = "\n".join([m.content for m in system_msgs])
+        full_prompt = f"[SYSTEM: {system_content}]\n\n{full_prompt}"
+    
     return {
         "attachments": [],
         "chatId": generate_uuid(),
         "language": "AUTO",
         "message": {
             "childId": generate_uuid(),
-            "content": last.content,
+            "content": full_prompt,
             "context": "",
             "id": generate_uuid(),
             "parentId": "root"
@@ -186,17 +228,13 @@ def call_merlin(payload):
     global AUTH_TOKEN
     for attempt in range(3):
         headers = get_headers_with_token(AUTH_TOKEN)
-        try:
-            resp = requests.post(
-                MERLIN_API_URL,
-                json=payload,
-                headers=headers,
-                timeout=120,  # <-- timeout 120 detik
-                stream=True
-            )
-        except requests.exceptions.Timeout:
-            print("⏰ Timeout saat menghubungi Merlin, retry...")
-            continue
+        resp = requests.post(
+            MERLIN_API_URL,
+            json=payload,
+            headers=headers,
+            timeout=180,  # 3 menit
+            stream=True
+        )
         if resp.status_code == 401:
             print("⏰ Token expired, refresh...")
             new = login_to_merlin()
@@ -204,20 +242,13 @@ def call_merlin(payload):
                 AUTH_TOKEN = new
                 continue
         return resp
-    raise HTTPException(502, "Gagal hubungi Merlin setelah retry")
+    raise HTTPException(502, "Gagal hubungi Merlin")
 
 # =============== STREAMING ===============
 async def stream_generator(payload, model):
     resp = call_merlin(payload)
     full_content = ""
-    last_ping = time.time()
-    
     for line in resp.iter_lines():
-        # Kirim ping setiap 5 detik agar koneksi tidak putus
-        if time.time() - last_ping > 5:
-            yield ": ping\n\n"
-            last_ping = time.time()
-        
         if line:
             line = line.decode('utf-8')
             if line.startswith('data: '):
@@ -241,7 +272,6 @@ async def stream_generator(payload, model):
                             yield f"data: {json.dumps(chunk)}\n\n"
                 except:
                     pass
-    
     # Send final chunk
     final = {
         "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
@@ -286,6 +316,8 @@ async def chat_completions(req: ChatCompletionRequest, auth: str = Depends(verif
         content = extract_content_from_sse(resp.text)
         if not content:
             content = "Maaf, tidak dapat memproses permintaan."
+        
+        # Kirim response format OpenAI (tanpa tool_calls)
         return {
             "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
             "object": "chat.completion",
@@ -293,10 +325,17 @@ async def chat_completions(req: ChatCompletionRequest, auth: str = Depends(verif
             "model": req.model,
             "choices": [{
                 "index": 0,
-                "message": {"role": "assistant", "content": content},
+                "message": {
+                    "role": "assistant",
+                    "content": content
+                },
                 "finish_reason": "stop"
             }],
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            "usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0
+            }
         }
 
 @app.get("/")
@@ -308,7 +347,8 @@ async def root():
             "models": "/v1/models",
             "chat": "/v1/chat/completions"
         },
-        "auth": "Bearer token or X-API-Key header"
+        "auth": "Bearer token or X-API-Key header",
+        "tools_support": "Tools are injected as prompt context (not native function calling)"
     }
 
 if __name__ == "__main__":
