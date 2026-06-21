@@ -1,0 +1,144 @@
+﻿"Model","Status","Result"
+"auto","⚠️  EMPTY","Response kosong"
+"auto-select","⚠️  EMPTY","Response kosong"
+"gemini-3.5-flash","✅ OK","Saya adalah Gemini, sebuah model bahasa besar yang"
+"gemini-3.1-pro","✅ OK","Halo! Saya adalah **Gemini 3.1 Pro**, sebuah model"
+"gemini-3.1-flash-lite","✅ OK","Halo! Saya adalah **Gemini 3.1 Flash Lite**, sebua"
+"gemini-2.5-flash-lite","✅ OK","Halo! Saya adalah model bahasa besar yang dilatih "
+"gemini-2.5-pro","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya adalah **MiniMax-M2.7**, sebu"
+"gemini-2.5-flash","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya adalah **MiniMax-M2.7**, sebu"
+"gemini-2.0-pro","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya adalah **MiniMax-M2.7**, asis"
+"gemini-2.0-flash","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya adalah **MiniMax-M2.7**, sebu"
+"gemini-1.5-pro","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya adalah **MiniMax-M2.7**, sebu"
+"gemini-1.5-flash","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya adalah **MiniMax-M2.7**, asis"
+"gemini-1.0-pro","⚠️  EMPTY","Response kosong"
+"gpt-5.5","✅ OK","Halo! Aku **ChatGPT**, asisten AI dari OpenAI.
+
+Ak"
+"gpt-5.4","✅ OK","Halo! Aku ChatGPT, asisten AI yang bisa bantu kamu"
+"gpt-4o","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya adalah **MiniMax-M2.7**, sebu"
+"gpt-4o-mini","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya adalah **MiniMax-M2.7**, sebu"
+"gpt-4.1","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya adalah **MiniMax-M2.7**, sebu"
+"gpt-4.1-mini","❌ ERROR","The request was aborted: The operation has timed o"
+"gpt-4","⚠️  EMPTY","Response kosong"
+"gpt-4-turbo","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya adalah **MiniMax-M2.7**, sebu"
+"gpt-3.5-turbo","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya **MiniMax-M2.7**, sebuah larg"
+"o1","⚠️  EMPTY","Response kosong"
+"o1-mini","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya adalah **MiniMax-M2.7**, sebu"
+"o3-mini","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya adalah **MiniMax-M2.7**, sebu"
+"claude-4.8-opus","✅ OK","Halo! Aku **Claude**, asisten AI yang bisa bantu j"
+"claude-4.7-opus","✅ OK","Halo! Saya **Claude**, asisten AI yang bisa memban"
+"claude-4.6-opus","✅ OK","Halo! Aku asisten AI yang bisa bantu kamu dengan b"
+"claude-4.6-sonnet","✅ OK","Saya Claude, asisten AI buatan Anthropic. Saya bis"
+"claude-4.5-haiku","✅ OK","Halo! Aku Claude Haiku 4.5, asisten AI dari keluar"
+"claude-3.7-sonnet","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya adalah **MiniMax-M2.7**, sebu"
+"claude-3.5-sonnet","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya adalah **MiniMax-M2.7**, sebu"
+"claude-3-opus","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya **MiniMax-M2.7**, sebuah larg"
+"claude-3-sonnet","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya adalah **MiniMax-M2.7**, sebu"
+"claude-3-haiku","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya adalah **MiniMax-M2.7**, sebu"
+"claude-2.1","⚠️  EMPTY","Response kosong"
+"claude-2","⚠️  EMPTY","Response kosong"
+"grok-4.3","✅ OK","Halo! Saya adalah **Grok 4.3**, model bahasa besar"
+"grok-3","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya adalah **AI Assistant** yang "
+"grok-2","⚠️  EMPTY","Response kosong"
+"grok-1.5","⚠️  EMPTY","Response kosong"
+"grok-1","⚠️  EMPTY","Response kosong"
+"deepseek-v4-pro","❌ ERROR","The request was aborted: The operation has timed o"
+"deepseek-v3","❌ ERROR","The request was aborted: The operation has timed o"
+"deepseek-r1","❌ ERROR","The request was aborted: The operation has timed o"
+"deepseek-coder","❌ ERROR","The request was aborted: The operation has timed o"
+"deepseek-chat","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya adalah **MiniMax-M2.7**, sebu"
+"glm-5.1","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya adalah **GLM-5.1**, sebuah mo"
+"glm-4","⚠️  EMPTY","Response kosong"
+"glm-4-plus","⚠️  EMPTY","Response kosong"
+"glm-4-air","⚠️  EMPTY","Response kosong"
+"glm-3-turbo","⚠️  EMPTY","Response kosong"
+"kimi-k2.6","❌ ERROR","The request was aborted: The operation has timed o"
+"kimi-k2.5","⚠️  EMPTY","Response kosong"
+"minimax-m2.7","✅ OK","Halo! Ã°ÂÂÂ
+
+Saya **MiniMax-M2.7**, sebuah larg"
+"minimax-m2.5","✅ OK","Halo! Saya adalah MiniMax-M2.5, asisten AI yang di"
+"mistral-large","⚠️  EMPTY","Response kosong"
+"mistral-medium","⚠️  EMPTY","Response kosong"
+"mistral-small","⚠️  EMPTY","Response kosong"
+"mistral-tiny","⚠️  EMPTY","Response kosong"
+"mistral-7b","⚠️  EMPTY","Response kosong"
+"llama-3.3","⚠️  EMPTY","Response kosong"
+"llama-3.2","⚠️  EMPTY","Response kosong"
+"llama-3.1","⚠️  EMPTY","Response kosong"
+"llama-3","⚠️  EMPTY","Response kosong"
+"llama-2","⚠️  EMPTY","Response kosong"
+"llama-2-70b","⚠️  EMPTY","Response kosong"
+"llama-2-13b","⚠️  EMPTY","Response kosong"
+"llama-2-7b","⚠️  EMPTY","Response kosong"
+"perplexity-sonar","⚠️  EMPTY","Response kosong"
+"perplexity-sonar-pro","⚠️  EMPTY","Response kosong"
+"perplexity-llama","⚠️  EMPTY","Response kosong"
+"command-r-plus","⚠️  EMPTY","Response kosong"
+"command-r","⚠️  EMPTY","Response kosong"
+"command-nightly","⚠️  EMPTY","Response kosong"
+"qwen-2.5","⚠️  EMPTY","Response kosong"
+"qwen-2.5-72b","⚠️  EMPTY","Response kosong"
+"qwen-2.5-32b","⚠️  EMPTY","Response kosong"
+"qwen-2.5-14b","⚠️  EMPTY","Response kosong"
+"qwen-2","⚠️  EMPTY","Response kosong"
+"qwen-1.5","⚠️  EMPTY","Response kosong"
+"falcon-180b","⚠️  EMPTY","Response kosong"
+"falcon-40b","⚠️  EMPTY","Response kosong"
+"falcon-7b","⚠️  EMPTY","Response kosong"
+"mixtral-8x7b","⚠️  EMPTY","Response kosong"
+"mixtral-8x22b","⚠️  EMPTY","Response kosong"
+"gemma-2","⚠️  EMPTY","Response kosong"
+"gemma-1","⚠️  EMPTY","Response kosong"
+"phi-3","⚠️  EMPTY","Response kosong"
+"phi-2","⚠️  EMPTY","Response kosong"
+"stablelm","⚠️  EMPTY","Response kosong"
+"zephyr","⚠️  EMPTY","Response kosong"
+"jamba-1.5-large","⚠️  EMPTY","Response kosong"
+"jamba-1.5-mini","⚠️  EMPTY","Response kosong"
+"dbrx-instruct","⚠️  EMPTY","Response kosong"
+"solar-pro","⚠️  EMPTY","Response kosong"
+"solar-mini","⚠️  EMPTY","Response kosong"

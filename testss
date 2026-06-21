@@ -1,0 +1,326 @@
+# ============================================================
+# SCRIPT AUTO-SETUP & TEST MERLIN PROXY
+# ============================================================
+# Sebelum jalanin:
+# 1. Ganti GITHUB_USERNAME dengan username GitHub kamu
+# 2. Ganti REPO_NAME dengan nama repository yang sudah dibuat di GitHub
+# 3. Pastikan repository di GitHub KOSONG (tanpa README)
+# ============================================================
+
+$GITHUB_USERNAME = "azerodesign"        # <-- GANTI
+$REPO_NAME = "merlin-proxy"          # <-- GANTI
+$API_KEY = "sk-9894908a-3827-446c-9769-cde7065b5b68"
+$BASE_URL = "http://localhost:8000"
+
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host "🚀 MERLIN PROXY - AUTO SETUP & TEST" -ForegroundColor Cyan
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host ""
+
+# ============================================================
+# 1. GIT INIT & SETUP
+# ============================================================
+Write-Host "📦 STEP 1: Git Setup" -ForegroundColor Yellow
+
+# Cek apakah sudah git init
+if (-not (Test-Path ".git")) {
+    git init
+}
+
+# Rename branch ke main
+git branch -m master main 2>$null
+
+# Cek status
+git status
+
+# Remote
+Write-Host ""
+Write-Host "🔗 Menambahkan remote origin..."
+git remote add origin "https://github.com/$GITHUB_USERNAME/$REPO_NAME.git" 2>$null
+git remote -v
+
+Write-Host ""
+Write-Host "✅ Git setup selesai" -ForegroundColor Green
+Write-Host ""
+
+# ============================================================
+# 2. CREATE .gitignore (if not exists)
+# ============================================================
+if (-not (Test-Path ".gitignore")) {
+    @"
+venv/
+.env
+__pycache__/
+*.pyc
+.DS_Store
+api_keys.json
+"@ | Out-File -FilePath .gitignore -Encoding UTF8
+    Write-Host "📄 .gitignore dibuat" -ForegroundColor Green
+}
+
+# ============================================================
+# 3. CREATE .env.example (template tanpa rahasia)
+# ============================================================
+@"
+# Merlin Proxy Environment Variables
+# Copy to .env and fill with your values
+
+AUTH_TOKEN=
+MERLIN_API_URL=https://www.getmerlin.in/arcane/api/v2/thread/unified
+MERLIN_EMAIL=your_email@example.com
+MERLIN_PASSWORD=your_password
+FIREBASE_API_KEY=your_firebase_api_key
+PROXY_API_KEY=your_proxy_api_key
+"@ | Out-File -FilePath .env.example -Encoding UTF8
+Write-Host "📄 .env.example dibuat" -ForegroundColor Green
+
+# ============================================================
+# 4. CREATE requirements.txt (if not exists)
+# ============================================================
+if (-not (Test-Path "requirements.txt")) {
+    @"
+fastapi
+uvicorn
+requests
+python-dotenv
+"@ | Out-File -FilePath requirements.txt -Encoding UTF8
+    Write-Host "📄 requirements.txt dibuat" -ForegroundColor Green
+}
+
+# ============================================================
+# 5. GIT ADD & COMMIT
+# ============================================================
+Write-Host ""
+Write-Host "📦 STEP 2: Git Add & Commit" -ForegroundColor Yellow
+
+git add .
+git commit -m "Initial commit: Merlin Proxy with API Key auth"
+
+Write-Host ""
+Write-Host "✅ Commit selesai" -ForegroundColor Green
+Write-Host ""
+
+# ============================================================
+# 6. PUSH TO GITHUB
+# ============================================================
+Write-Host "📦 STEP 3: Push ke GitHub" -ForegroundColor Yellow
+Write-Host "🚨 PASTIKAN REPOSITORY SUDAH DIBUAT DI GITHUB!" -ForegroundColor Red
+Write-Host "   URL: https://github.com/$GITHUB_USERNAME/$REPO_NAME" -ForegroundColor Cyan
+Write-Host ""
+
+$confirm = Read-Host "Sudah buat repository? (y/n)"
+if ($confirm -ne 'y') {
+    Write-Host "❌ Batalkan push. Buat repository dulu di GitHub." -ForegroundColor Red
+    exit
+}
+
+git push -u origin main
+
+Write-Host ""
+Write-Host "✅ Push selesai" -ForegroundColor Green
+Write-Host ""
+
+# ============================================================
+# 7. START SERVER (untuk test)
+# ============================================================
+Write-Host "🧪 STEP 4: Menjalankan server untuk test..." -ForegroundColor Yellow
+
+# Cek apakah venv aktif
+if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+    Write-Host "❌ Python tidak ditemukan. Pastikan venv aktif." -ForegroundColor Red
+    exit
+}
+
+# Jalankan server di background
+$serverProcess = Start-Process -FilePath "uvicorn" -ArgumentList "main:app --reload" -PassThru -NoNewWindow
+
+Write-Host "⏳ Menunggu server siap (5 detik)..." -ForegroundColor Cyan
+Start-Sleep -Seconds 5
+
+# ============================================================
+# 8. RUN TESTS
+# ============================================================
+Write-Host ""
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host "🧪 STEP 5: Running Tests" -ForegroundColor Cyan
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host ""
+
+$tests = @()
+
+# Test 1: Health Check
+Write-Host "1️⃣ Test: Health Check (tanpa auth)" -ForegroundColor Yellow
+try {
+    $response = Invoke-RestMethod -Uri "$BASE_URL/health" -Method Get -ErrorAction Stop
+    $status = "✅ PASS"
+    $msg = "Status: $($response.status)"
+} catch {
+    $status = "❌ FAIL"
+    $msg = $_.Exception.Message
+}
+Write-Host "   $status - $msg" -ForegroundColor $(if ($status -eq "✅ PASS") { "Green" } else { "Red" })
+$tests += [PSCustomObject]@{Test="Health Check"; Status=$status; Detail=$msg}
+Write-Host ""
+
+# Test 2: Chat tanpa API Key (harus 401)
+Write-Host "2️⃣ Test: Chat tanpa API Key (harus 401)" -ForegroundColor Yellow
+try {
+    $body = '{"model":"claude-4.8-opus","messages":[{"role":"user","content":"Halo"}]}'
+    $response = Invoke-RestMethod -Uri "$BASE_URL/v1/chat/completions" -Method Post -Body $body -ContentType "application/json" -ErrorAction Stop
+    $status = "❌ FAIL"
+    $msg = "Seharusnya error 401, tapi berhasil"
+} catch {
+    if ($_.Exception.Response.StatusCode -eq 401) {
+        $status = "✅ PASS"
+        $msg = "Error 401 sesuai harapan"
+    } else {
+        $status = "⚠️ PARTIAL"
+        $msg = "Error code: $($_.Exception.Response.StatusCode)"
+    }
+}
+Write-Host "   $status - $msg" -ForegroundColor $(if ($status -eq "✅ PASS") { "Green" } elseif ($status -eq "⚠️ PARTIAL") { "Yellow" } else { "Red" })
+$tests += [PSCustomObject]@{Test="Chat tanpa API Key"; Status=$status; Detail=$msg}
+Write-Host ""
+
+# Test 3: Chat dengan API Key salah (harus 403)
+Write-Host "3️⃣ Test: Chat dengan API Key salah (harus 403)" -ForegroundColor Yellow
+try {
+    $headers = @{"X-API-Key" = "salah"}
+    $body = '{"model":"claude-4.8-opus","messages":[{"role":"user","content":"Halo"}]}'
+    $response = Invoke-RestMethod -Uri "$BASE_URL/v1/chat/completions" -Method Post -Headers $headers -Body $body -ContentType "application/json" -ErrorAction Stop
+    $status = "❌ FAIL"
+    $msg = "Seharusnya error 403, tapi berhasil"
+} catch {
+    if ($_.Exception.Response.StatusCode -eq 403) {
+        $status = "✅ PASS"
+        $msg = "Error 403 sesuai harapan"
+    } else {
+        $status = "⚠️ PARTIAL"
+        $msg = "Error code: $($_.Exception.Response.StatusCode)"
+    }
+}
+Write-Host "   $status - $msg" -ForegroundColor $(if ($status -eq "✅ PASS") { "Green" } elseif ($status -eq "⚠️ PARTIAL") { "Yellow" } else { "Red" })
+$tests += [PSCustomObject]@{Test="Chat API Key salah"; Status=$status; Detail=$msg}
+Write-Host ""
+
+# Test 4: Chat dengan API Key benar (harus 200)
+Write-Host "4️⃣ Test: Chat dengan API Key benar (harus 200)" -ForegroundColor Yellow
+try {
+    $headers = @{"X-API-Key" = $API_KEY}
+    $body = '{"model":"claude-4.8-opus","messages":[{"role":"user","content":"Halo"}]}'
+    $response = Invoke-RestMethod -Uri "$BASE_URL/v1/chat/completions" -Method Post -Headers $headers -Body $body -ContentType "application/json" -ErrorAction Stop
+    $content = $response.choices[0].message.content
+    if ($content -and $content.Length -gt 0) {
+        $status = "✅ PASS"
+        $msg = "Respons: $($content.Substring(0, [Math]::Min(50, $content.Length)))..."
+    } else {
+        $status = "⚠️ PARTIAL"
+        $msg = "Respons kosong"
+    }
+} catch {
+    $status = "❌ FAIL"
+    $msg = $_.Exception.Message
+}
+Write-Host "   $status - $msg" -ForegroundColor $(if ($status -eq "✅ PASS") { "Green" } elseif ($status -eq "⚠️ PARTIAL") { "Yellow" } else { "Red" })
+$tests += [PSCustomObject]@{Test="Chat dengan API Key benar"; Status=$status; Detail=$msg}
+Write-Host ""
+
+# Test 5: Auto-Login (cek apakah token diisi otomatis)
+Write-Host "5️⃣ Test: Auto-Login (cek .env)" -ForegroundColor Yellow
+$envContent = Get-Content .env -Raw -ErrorAction SilentlyContinue
+if ($envContent -match 'AUTH_TOKEN=eyJ') {
+    $status = "✅ PASS"
+    $msg = "Token terisi otomatis"
+} elseif ($envContent -match 'AUTH_TOKEN=') {
+    $status = "⚠️ PARTIAL"
+    $msg = "AUTH_TOKEN ada tapi belum terisi (mungkin belum expired)"
+} else {
+    $status = "⚠️ PARTIAL"
+    $msg = "File .env tidak ditemukan atau tidak ada AUTH_TOKEN"
+}
+Write-Host "   $status - $msg" -ForegroundColor $(if ($status -eq "✅ PASS") { "Green" } elseif ($status -eq "⚠️ PARTIAL") { "Yellow" } else { "Red" })
+$tests += [PSCustomObject]@{Test="Auto-Login"; Status=$status; Detail=$msg}
+Write-Host ""
+
+# Test 6: Models endpoint (jika ada)
+Write-Host "6️⃣ Test: Models endpoint" -ForegroundColor Yellow
+try {
+    $headers = @{"X-API-Key" = $API_KEY}
+    $response = Invoke-RestMethod -Uri "$BASE_URL/models" -Method Get -Headers $headers -ErrorAction Stop
+    $total = $response.total
+    $status = "✅ PASS"
+    $msg = "$total models ditemukan"
+} catch {
+    if ($_.Exception.Response.StatusCode -eq 404) {
+        $status = "⚠️ SKIP"
+        $msg = "Endpoint /models tidak ditemukan (opsional)"
+    } else {
+        $status = "❌ FAIL"
+        $msg = $_.Exception.Message
+    }
+}
+Write-Host "   $status - $msg" -ForegroundColor $(if ($status -eq "✅ PASS") { "Green" } elseif ($status -eq "⚠️ SKIP") { "Gray" } else { "Red" })
+$tests += [PSCustomObject]@{Test="Models endpoint"; Status=$status; Detail=$msg}
+Write-Host ""
+
+# ============================================================
+# 9. SUMMARY
+# ============================================================
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host "📊 SUMMARY TEST RESULTS" -ForegroundColor Cyan
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host ""
+
+$passCount = ($tests | Where-Object { $_.Status -eq "✅ PASS" }).Count
+$totalCount = $tests.Count
+
+foreach ($test in $tests) {
+    $color = "White"
+    if ($test.Status -eq "✅ PASS") { $color = "Green" }
+    elseif ($test.Status -eq "⚠️ PARTIAL") { $color = "Yellow" }
+    elseif ($test.Status -eq "⚠️ SKIP") { $color = "Gray" }
+    else { $color = "Red" }
+    Write-Host "  $($test.Test): $($test.Status)" -ForegroundColor $color
+    Write-Host "    Detail: $($test.Detail)" -ForegroundColor DarkGray
+}
+
+Write-Host ""
+Write-Host "✅ $passCount / $totalCount tests passed" -ForegroundColor $(if ($passCount -eq $totalCount) { "Green" } else { "Yellow" })
+Write-Host ""
+
+# ============================================================
+# 10. DEPLOY INSTRUCTIONS
+# ============================================================
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host "🚀 DEPLOY TO RAILWAY" -ForegroundColor Cyan
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "1️⃣ Code sudah di-push ke GitHub:" -ForegroundColor White
+Write-Host "   https://github.com/$GITHUB_USERNAME/$REPO_NAME" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "2️⃣ Di Railway, buat project baru:" -ForegroundColor White
+Write-Host "   - Deploy from GitHub repo"
+Write-Host "   - Pilih repo: $GITHUB_USERNAME/$REPO_NAME"
+Write-Host ""
+Write-Host "3️⃣ Set Environment Variables (wajib):" -ForegroundColor White
+Write-Host "   AUTH_TOKEN="
+Write-Host "   MERLIN_API_URL=https://www.getmerlin.in/arcane/api/v2/thread/unified"
+Write-Host "   MERLIN_EMAIL=your_email@example.com"
+Write-Host "   MERLIN_PASSWORD=your_password"
+Write-Host "   FIREBASE_API_KEY=your_firebase_api_key"
+Write-Host "   PROXY_API_KEY=$API_KEY"
+Write-Host ""
+Write-Host "4️⃣ Railway akan otomatis deploy dan menampilkan API key di logs" -ForegroundColor White
+Write-Host ""
+
+# ============================================================
+# 11. STOP SERVER
+# ============================================================
+Write-Host "⏹️ Menutup server..." -ForegroundColor Yellow
+Stop-Process -Id $serverProcess.Id -Force -ErrorAction SilentlyContinue
+Write-Host "✅ Server dihentikan" -ForegroundColor Green
+
+Write-Host ""
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host "✅ SEMUA SELESAI! 🚀" -ForegroundColor Green
+Write-Host "============================================================" -ForegroundColor Cyan
