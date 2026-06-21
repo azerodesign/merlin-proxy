@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
+# Import daftar akun
 from akun import ACCOUNTS
 
 load_dotenv()
@@ -41,10 +42,9 @@ last_index = -1
 
 print("=" * 60)
 print(f"🔐 PROXY API KEY: {PROXY_API_KEY}")
-print(f"👥 Total akun terdaftar: {len(ACCOUNTS)}")
+print(f"👥 Total akun: {len(ACCOUNTS)}")
 for i, acc in enumerate(ACCOUNTS):
-    proxy_status = "Ya" if acc.get("proxy") else "Tidak"
-    print(f"  {i+1}. {acc['email']} | Proxy: {proxy_status}")
+    print(f"  {i+1}. {acc['email']}")
 print("=" * 60)
 
 BASE_HEADERS = {
@@ -97,7 +97,7 @@ def verify_api_key(
         api_key = x_api_key
 
     if not api_key:
-        raise HTTPException(status_code=401, detail="API Key required. Provide 'Authorization: Bearer <key>' or 'X-API-Key: <key>'")
+        raise HTTPException(status_code=401, detail="API Key required")
     if api_key != PROXY_API_KEY:
         raise HTTPException(status_code=403, detail="Invalid API Key")
     return api_key
@@ -118,25 +118,14 @@ class ChatCompletionRequest(BaseModel):
 def generate_uuid() -> str:
     return str(uuid.uuid4())
 
-def login_to_merlin(email: str, password: str, proxy_url: str = None) -> Optional[str]:
+def login_to_merlin(email: str, password: str) -> Optional[str]:
     print(f"🔐 Login: {email}")
-    if not email or not password:
-        return None
-
     url = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
-    payload = {
-        "email": email,
-        "password": password,
-        "returnSecureToken": True
-    }
-
-    proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
-
+    payload = {"email": email, "password": password, "returnSecureToken": True}
     try:
         resp = requests.post(
             f"{url}?key={FIREBASE_API_KEY}",
             json=payload,
-            proxies=proxies,
             timeout=30
         )
         if resp.status_code == 200:
@@ -159,7 +148,6 @@ def get_headers_with_token(token: str) -> dict:
 def build_merlin_payload(req: ChatCompletionRequest) -> Dict[str, Any]:
     user_msgs = [m for m in req.messages if m.role == "user"]
     last = user_msgs[-1] if user_msgs else req.messages[-1]
-
     return {
         "attachments": [],
         "chatId": generate_uuid(),
@@ -185,66 +173,34 @@ def build_merlin_payload(req: ChatCompletionRequest) -> Dict[str, Any]:
     }
 
 def extract_content_from_sse(text: str) -> str:
-    parts = []
-    # Coba pola: event: message ... data: {...}
-    pattern = r'event: message\s+data: ({.*?})\n'
+    """Ekstrak konten dari SSE - VERSI YANG SUDAH TERUJI"""
+    content_parts = []
+    pattern = r'data: ({.*?})\n'
     matches = re.findall(pattern, text, re.DOTALL)
-    if matches:
-        for match in matches:
-            try:
-                data = json.loads(match)
-                if 'data' in data and isinstance(data['data'], dict):
-                    inner = data['data']
-                    if inner.get('text'):
-                        parts.append(inner['text'])
-                    elif inner.get('content'):
-                        parts.append(inner['content'])
-                if data.get('text'):
-                    parts.append(data['text'])
-                elif data.get('content'):
-                    parts.append(data['content'])
-            except:
-                continue
-        result = ''.join(parts).strip()
-        if result:
-            return result
-
-    # Fallback: cari semua data: {...}
-    pattern2 = r'data: ({.*?})\n'
-    for match in re.findall(pattern2, text, re.DOTALL):
+    for match in matches:
         try:
             data = json.loads(match)
-            if isinstance(data, dict):
-                if 'data' in data and isinstance(data['data'], dict):
-                    inner = data['data']
-                    if inner.get('text'):
-                        parts.append(inner['text'])
-                    elif inner.get('content'):
-                        parts.append(inner['content'])
-                if data.get('text'):
-                    parts.append(data['text'])
-                elif data.get('content'):
-                    parts.append(data['content'])
+            if not isinstance(data, dict):
+                continue
+            # Cek di data.data.text atau data.data.content
+            if 'data' in data and isinstance(data['data'], dict):
+                inner = data['data']
+                if 'text' in inner and inner['text']:
+                    content_parts.append(inner['text'])
+                elif 'content' in inner and inner['content']:
+                    content_parts.append(inner['content'])
+            # Cek langsung di root
+            if 'text' in data and data['text']:
+                content_parts.append(data['text'])
+            elif 'content' in data and data['content']:
+                content_parts.append(data['content'])
+            # Cek di payload
+            if 'payload' in data and isinstance(data['payload'], dict):
+                if 'text' in data['payload'] and data['payload']['text']:
+                    content_parts.append(data['payload']['text'])
         except:
             continue
-    result = ''.join(parts).strip()
-    if result:
-        return result
-
-    # Fallback terakhir: coba parse sebagai JSON
-    try:
-        data = json.loads(text)
-        if isinstance(data, dict):
-            if 'response' in data:
-                return data['response']
-            if 'content' in data:
-                return data['content']
-            if 'text' in data:
-                return data['text']
-    except:
-        pass
-
-    return ""
+    return ''.join(content_parts).strip()
 
 def call_merlin_with_account(index: int, payload: dict) -> tuple:
     if index >= len(ACCOUNTS):
@@ -252,32 +208,29 @@ def call_merlin_with_account(index: int, payload: dict) -> tuple:
 
     acc = ACCOUNTS[index]
     email = acc["email"]
-    proxy_url = acc.get("proxy")
 
+    # Ambil token, login kalau belum
     token = TOKENS.get(index)
     if not token:
-        token = login_to_merlin(email, acc["password"], proxy_url)
+        token = login_to_merlin(email, acc["password"])
         if token:
             TOKENS[index] = token
         else:
             return None, f"Gagal login: {email}"
 
     headers = get_headers_with_token(token)
-    proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
 
     try:
         resp = requests.post(
             MERLIN_API_URL,
             json=payload,
             headers=headers,
-            proxies=proxies,
-            timeout=180,
-            stream=True
+            timeout=180
         )
 
         if resp.status_code == 401:
             print(f"⏰ Token expired: {email}, refresh...")
-            new_token = login_to_merlin(email, acc["password"], proxy_url)
+            new_token = login_to_merlin(email, acc["password"])
             if new_token:
                 TOKENS[index] = new_token
                 headers = get_headers_with_token(new_token)
@@ -285,9 +238,7 @@ def call_merlin_with_account(index: int, payload: dict) -> tuple:
                     MERLIN_API_URL,
                     json=payload,
                     headers=headers,
-                    proxies=proxies,
-                    timeout=180,
-                    stream=True
+                    timeout=180
                 )
             else:
                 return None, f"Refresh token gagal: {email}"
@@ -295,13 +246,11 @@ def call_merlin_with_account(index: int, payload: dict) -> tuple:
         if resp.status_code != 200:
             return None, f"HTTP {resp.status_code}: {resp.text[:100]}"
 
-        # DEBUG: print raw response
-        print("📥 RAW RESPONSE (300 chars):", resp.text[:300])
-
         content = extract_content_from_sse(resp.text)
         if not content:
-            return None, "Response kosong (mungkin error parsing)"
+            return None, "Response kosong (parsing gagal)"
 
+        print(f"✅ Akun {index+1} ({email}) berhasil")
         return content, None
 
     except requests.exceptions.Timeout:
@@ -328,12 +277,7 @@ async def list_models(auth: str = Depends(verify_api_key)):
     return {
         "object": "list",
         "data": [
-            {
-                "id": m,
-                "object": "model",
-                "created": 1700000000,
-                "owned_by": "merlin-proxy"
-            }
+            {"id": m, "object": "model", "created": 1700000000, "owned_by": "merlin-proxy"}
             for m in AVAILABLE_MODELS
         ]
     }
@@ -363,17 +307,10 @@ async def chat_completions(
                 "model": req.model,
                 "choices": [{
                     "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": content
-                    },
+                    "message": {"role": "assistant", "content": content},
                     "finish_reason": "stop"
                 }],
-                "usage": {
-                    "prompt_tokens": 0,
-                    "completion_tokens": 0,
-                    "total_tokens": 0
-                }
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             }
         else:
             print(f"❌ Akun {idx+1} gagal: {error}")
@@ -393,7 +330,6 @@ async def root():
         "accounts": len(ACCOUNTS)
     }
 
-# =============== MAIN ===============
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
