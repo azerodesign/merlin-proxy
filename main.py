@@ -3,7 +3,7 @@ import json
 import uuid
 import time
 import re
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, AsyncGenerator
 
 import requests
 from fastapi import FastAPI, HTTPException, Depends, Header
@@ -12,15 +12,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# Import daftar akun dari file terpisah
 from akun import ACCOUNTS
 
 load_dotenv()
 
 app = FastAPI(
-    title="Merlin Proxy Multi-Akun (Non-Streaming)",
-    description="Proxy API Merlin ke format OpenAI dengan rotasi akun & auto-login. Streaming dimatikan untuk kompatibilitas Hermes.",
-    version="3.1.0"
+    title="Merlin Proxy Multi-Akun",
+    description="Proxy API Merlin dengan rotasi akun & auto-login. Support streaming.",
+    version="3.2.0"
 )
 
 # =============== CORS ===============
@@ -247,7 +246,7 @@ def extract_content_from_sse(text: str) -> str:
     except:
         pass
 
-    return ""  # Kosong, nanti akan diganti dengan pesan fallback
+    return ""
 
 def call_merlin_with_account(index: int, payload: dict) -> tuple:
     if index >= len(ACCOUNTS):
@@ -298,31 +297,7 @@ def call_merlin_with_account(index: int, payload: dict) -> tuple:
         if resp.status_code != 200:
             return None, f"HTTP {resp.status_code}: {resp.text[:100]}"
 
-        # Debug: print raw response
-        print("📥 RAW RESPONSE (300 chars):", resp.text[:300])
-
-        content = extract_content_from_sse(resp.text)
-
-        # Fallback jika kosong
-        if not content:
-            # Coba ambil dari resp.json() langsung (kalau ada)
-            try:
-                data = resp.json()
-                if isinstance(data, dict):
-                    if 'response' in data:
-                        content = data['response']
-                    elif 'content' in data:
-                        content = data['content']
-                    elif 'text' in data:
-                        content = data['text']
-            except:
-                pass
-
-        # Jika masih kosong, beri pesan default
-        if not content:
-            content = "Maaf, tidak dapat memproses permintaan."
-
-        return content, None
+        return resp, None  # kembalikan raw response
 
     except requests.exceptions.Timeout:
         return None, "Timeout"
@@ -337,6 +312,56 @@ def get_next_account() -> int:
         return -1
     last_index = (last_index + 1) % len(ACCOUNTS)
     return last_index
+
+# =============== STREAM GENERATOR ===============
+async def stream_generator(resp, model):
+    """Generate SSE chunks dari response Merlin"""
+    full_content = ""
+    for line in resp.iter_lines():
+        if line:
+            line = line.decode('utf-8')
+            if line.startswith('data: '):
+                try:
+                    data = json.loads(line[6:])
+                    if isinstance(data, dict):
+                        # Cari text
+                        text = None
+                        if 'data' in data and isinstance(data['data'], dict):
+                            inner = data['data']
+                            text = inner.get('text') or inner.get('content')
+                        if not text:
+                            text = data.get('text') or data.get('content')
+                        if text:
+                            full_content += text
+                            chunk = {
+                                "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+                                "object": "chat.completion.chunk",
+                                "created": int(time.time()),
+                                "model": model,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {"content": text},
+                                    "finish_reason": None
+                                }]
+                            }
+                            yield f"data: {json.dumps(chunk)}\n\n"
+                except:
+                    pass
+
+    # Kirim chunk terakhir dengan finish_reason
+    final_chunk = {
+        "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "delta": {},
+            "finish_reason": "stop"
+        }]
+    }
+    yield f"data: {json.dumps(final_chunk)}\n\n"
+    yield "data: [DONE]\n\n"
 
 # =============== ENDPOINTS ===============
 @app.get("/health")
@@ -363,24 +388,44 @@ async def chat_completions(
     req: ChatCompletionRequest,
     auth: str = Depends(verify_api_key)
 ):
-    # =============================================
-    # FORCE NON-STREAMING (Hermes Gateway compatible)
-    # =============================================
-    req.stream = False
-
     attempts = len(ACCOUNTS)
     if attempts == 0:
         raise HTTPException(503, "Tidak ada akun tersedia")
 
+    # Coba setiap akun sampai berhasil
     for _ in range(attempts):
         idx = get_next_account()
         if idx == -1:
             break
 
         payload = build_merlin_payload(req)
-        content, error = call_merlin_with_account(idx, payload)
+        result, error = call_merlin_with_account(idx, payload)
 
-        if content:
+        if result is None:
+            print(f"❌ Akun {idx+1} gagal: {error}")
+            continue
+
+        # result adalah response object dari requests
+        resp = result
+
+        # Jika user request streaming, streamingkan
+        if req.stream:
+            print(f"📡 Streaming dari akun {idx+1}")
+            return StreamingResponse(
+                stream_generator(resp, req.model),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive"
+                }
+            )
+        else:
+            # Non-streaming: ekstrak konten
+            content = extract_content_from_sse(resp.text)
+            if not content:
+                content = "Maaf, tidak dapat memproses permintaan."
+
+            print(f"✅ Akun {idx+1} berhasil (non-streaming)")
             return {
                 "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
                 "object": "chat.completion",
@@ -400,15 +445,13 @@ async def chat_completions(
                     "total_tokens": 0
                 }
             }
-        else:
-            print(f"❌ Akun {idx+1} gagal: {error}")
 
     raise HTTPException(503, "Semua akun gagal. Cek log untuk detail.")
 
 @app.get("/")
 async def root():
     return {
-        "message": "Merlin Proxy Multi-Akun running (Non-Streaming)",
+        "message": "Merlin Proxy Multi-Akun running (Streaming support)",
         "endpoints": {
             "health": "/health",
             "models": "/v1/models",
@@ -418,7 +461,6 @@ async def root():
         "accounts": len(ACCOUNTS)
     }
 
-# =============== MAIN ===============
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
