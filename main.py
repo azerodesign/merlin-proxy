@@ -186,7 +186,17 @@ def call_merlin(payload):
     global AUTH_TOKEN
     for attempt in range(3):
         headers = get_headers_with_token(AUTH_TOKEN)
-        resp = requests.post(MERLIN_API_URL, json=payload, headers=headers, timeout=120, stream=True)
+        try:
+            resp = requests.post(
+                MERLIN_API_URL,
+                json=payload,
+                headers=headers,
+                timeout=120,  # <-- timeout 120 detik
+                stream=True
+            )
+        except requests.exceptions.Timeout:
+            print("⏰ Timeout saat menghubungi Merlin, retry...")
+            continue
         if resp.status_code == 401:
             print("⏰ Token expired, refresh...")
             new = login_to_merlin()
@@ -194,13 +204,20 @@ def call_merlin(payload):
                 AUTH_TOKEN = new
                 continue
         return resp
-    raise HTTPException(502, "Gagal hubungi Merlin")
+    raise HTTPException(502, "Gagal hubungi Merlin setelah retry")
 
 # =============== STREAMING ===============
 async def stream_generator(payload, model):
     resp = call_merlin(payload)
     full_content = ""
+    last_ping = time.time()
+    
     for line in resp.iter_lines():
+        # Kirim ping setiap 5 detik agar koneksi tidak putus
+        if time.time() - last_ping > 5:
+            yield ": ping\n\n"
+            last_ping = time.time()
+        
         if line:
             line = line.decode('utf-8')
             if line.startswith('data: '):
@@ -224,6 +241,7 @@ async def stream_generator(payload, model):
                             yield f"data: {json.dumps(chunk)}\n\n"
                 except:
                     pass
+    
     # Send final chunk
     final = {
         "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
