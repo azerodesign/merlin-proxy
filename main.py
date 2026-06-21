@@ -18,7 +18,7 @@ load_dotenv()
 
 app = FastAPI(
     title="Merlin Proxy Multi-Akun",
-    description="Proxy API Merlin dengan rotasi akun & auto-login. Support streaming.",
+    description="Proxy API Merlin dengan rotasi akun & auto-login, support streaming & non-streaming",
     version="3.2.0"
 )
 
@@ -211,7 +211,7 @@ def extract_content_from_sse(text: str) -> str:
         if result:
             return result
 
-    # 2. Fallback: cari semua data: {...} tanpa event
+    # 2. Fallback: cari semua data: {...}
     pattern2 = r'data: ({.*?})\n'
     for match in re.findall(pattern2, text, re.DOTALL):
         try:
@@ -233,7 +233,7 @@ def extract_content_from_sse(text: str) -> str:
     if result:
         return result
 
-    # 3. Terakhir: coba parse seluruh response sebagai JSON
+    # 3. Coba parse seluruh response sebagai JSON
     try:
         data = json.loads(text)
         if isinstance(data, dict):
@@ -297,14 +297,21 @@ def call_merlin_with_account(index: int, payload: dict) -> tuple:
         if resp.status_code != 200:
             return None, f"HTTP {resp.status_code}: {resp.text[:100]}"
 
-        return resp, None  # kembalikan raw response
+        content = extract_content_from_sse(resp.text)
+        if not content:
+            content = "Maaf, tidak dapat memproses permintaan."
+
+        # Simpan raw response untuk streaming
+        raw_response = resp.text
+
+        return content, raw_response, None
 
     except requests.exceptions.Timeout:
-        return None, "Timeout"
+        return None, None, "Timeout"
     except requests.exceptions.ConnectionError:
-        return None, "Connection error"
+        return None, None, "Connection error"
     except Exception as e:
-        return None, str(e)
+        return None, None, str(e)
 
 def get_next_account() -> int:
     global last_index
@@ -313,42 +320,24 @@ def get_next_account() -> int:
     last_index = (last_index + 1) % len(ACCOUNTS)
     return last_index
 
-# =============== STREAM GENERATOR ===============
-async def stream_generator(resp, model):
-    """Generate SSE chunks dari response Merlin"""
-    full_content = ""
-    for line in resp.iter_lines():
-        if line:
-            line = line.decode('utf-8')
-            if line.startswith('data: '):
-                try:
-                    data = json.loads(line[6:])
-                    if isinstance(data, dict):
-                        # Cari text
-                        text = None
-                        if 'data' in data and isinstance(data['data'], dict):
-                            inner = data['data']
-                            text = inner.get('text') or inner.get('content')
-                        if not text:
-                            text = data.get('text') or data.get('content')
-                        if text:
-                            full_content += text
-                            chunk = {
-                                "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
-                                "object": "chat.completion.chunk",
-                                "created": int(time.time()),
-                                "model": model,
-                                "choices": [{
-                                    "index": 0,
-                                    "delta": {"content": text},
-                                    "finish_reason": None
-                                }]
-                            }
-                            yield f"data: {json.dumps(chunk)}\n\n"
-                except:
-                    pass
+# =============== STREAMING GENERATOR ===============
+async def stream_generator(content: str, model: str):
+    """Generate SSE chunks from final content (for Hermes compatibility)"""
+    # Kirim chunk pertama (isi penuh)
+    chunk = {
+        "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "delta": {"content": content},
+            "finish_reason": None
+        }]
+    }
+    yield f"data: {json.dumps(chunk)}\n\n"
 
-    # Kirim chunk terakhir dengan finish_reason
+    # Kirim chunk selesai
     final_chunk = {
         "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
         "object": "chat.completion.chunk",
@@ -392,66 +381,55 @@ async def chat_completions(
     if attempts == 0:
         raise HTTPException(503, "Tidak ada akun tersedia")
 
-    # Coba setiap akun sampai berhasil
     for _ in range(attempts):
         idx = get_next_account()
         if idx == -1:
             break
 
         payload = build_merlin_payload(req)
-        result, error = call_merlin_with_account(idx, payload)
+        content, raw_response, error = call_merlin_with_account(idx, payload)
 
-        if result is None:
-            print(f"❌ Akun {idx+1} gagal: {error}")
-            continue
-
-        # result adalah response object dari requests
-        resp = result
-
-        # Jika user request streaming, streamingkan
-        if req.stream:
-            print(f"📡 Streaming dari akun {idx+1}")
-            return StreamingResponse(
-                stream_generator(resp, req.model),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive"
+        if content:
+            # Kalau client minta streaming
+            if req.stream:
+                return StreamingResponse(
+                    stream_generator(content, req.model),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive"
+                    }
+                )
+            else:
+                # Non-streaming: return JSON biasa
+                return {
+                    "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
+                    "model": req.model,
+                    "choices": [{
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": content
+                        },
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0
+                    }
                 }
-            )
         else:
-            # Non-streaming: ekstrak konten
-            content = extract_content_from_sse(resp.text)
-            if not content:
-                content = "Maaf, tidak dapat memproses permintaan."
-
-            print(f"✅ Akun {idx+1} berhasil (non-streaming)")
-            return {
-                "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": req.model,
-                "choices": [{
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": content
-                    },
-                    "finish_reason": "stop"
-                }],
-                "usage": {
-                    "prompt_tokens": 0,
-                    "completion_tokens": 0,
-                    "total_tokens": 0
-                }
-            }
+            print(f"❌ Akun {idx+1} gagal: {error}")
 
     raise HTTPException(503, "Semua akun gagal. Cek log untuk detail.")
 
 @app.get("/")
 async def root():
     return {
-        "message": "Merlin Proxy Multi-Akun running (Streaming support)",
+        "message": "Merlin Proxy Multi-Akun running (Support Streaming)",
         "endpoints": {
             "health": "/health",
             "models": "/v1/models",
@@ -461,6 +439,7 @@ async def root():
         "accounts": len(ACCOUNTS)
     }
 
+# =============== MAIN ===============
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
