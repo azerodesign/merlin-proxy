@@ -20,7 +20,7 @@ load_dotenv()
 app = FastAPI(
     title="Merlin Proxy Multi-Akun",
     description="Proxy API Merlin ke format OpenAI dengan rotasi akun & auto-login",
-    version="3.0.0"
+    version="3.1.0"
 )
 
 # =============== CORS ===============
@@ -190,36 +190,78 @@ def build_merlin_payload(req: ChatCompletionRequest) -> Dict[str, Any]:
     }
 
 def extract_content_from_sse(text: str) -> str:
-    """Ekstrak konten dari response SSE Merlin"""
+    """
+    Ekstrak konten dari response SSE Merlin dengan berbagai fallback.
+    """
+    # Coba pola: event: message ... data: {...}
     parts = []
-    pattern = r'data: ({.*?})\n'
-    for match in re.findall(pattern, text, re.DOTALL):
+    pattern_event = r'event: message\s+data: ({.*?})\n'
+    matches = re.findall(pattern_event, text, re.DOTALL)
+    if matches:
+        for match in matches:
+            try:
+                data = json.loads(match)
+                if 'data' in data and isinstance(data['data'], dict):
+                    inner = data['data']
+                    if inner.get('text'):
+                        parts.append(inner['text'])
+                    elif inner.get('content'):
+                        parts.append(inner['content'])
+                if data.get('text'):
+                    parts.append(data['text'])
+                elif data.get('content'):
+                    parts.append(data['content'])
+            except:
+                continue
+        result = ''.join(parts).strip()
+        if result:
+            return result
+
+    # Fallback: cari semua data: {...} tanpa event
+    pattern_data = r'data: ({.*?})\n'
+    for match in re.findall(pattern_data, text, re.DOTALL):
         try:
             data = json.loads(match)
             if not isinstance(data, dict):
                 continue
-
-            # Coba berbagai level
             if 'data' in data and isinstance(data['data'], dict):
                 inner = data['data']
                 if inner.get('text'):
                     parts.append(inner['text'])
                 elif inner.get('content'):
                     parts.append(inner['content'])
-
             if data.get('text'):
                 parts.append(data['text'])
             elif data.get('content'):
                 parts.append(data['content'])
-
             if 'payload' in data and isinstance(data['payload'], dict):
                 if data['payload'].get('text'):
                     parts.append(data['payload']['text'])
-
         except json.JSONDecodeError:
             continue
 
-    return ''.join(parts).strip()
+    result = ''.join(parts).strip()
+    if result:
+        return result
+
+    # Fallback terakhir: jika response adalah JSON biasa (bukan SSE)
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            if 'response' in data:
+                return data['response']
+            if 'content' in data:
+                return data['content']
+            if 'text' in data:
+                return data['text']
+            if 'choices' in data and isinstance(data['choices'], list):
+                for choice in data['choices']:
+                    if 'message' in choice and 'content' in choice['message']:
+                        return choice['message']['content']
+    except:
+        pass
+
+    return ""
 
 def call_merlin_with_account(index: int, payload: dict) -> tuple:
     """
@@ -273,12 +315,20 @@ def call_merlin_with_account(index: int, payload: dict) -> tuple:
             else:
                 return None, f"Refresh token gagal: {email}"
 
+        # Debug: cetak raw response
+        raw_text = resp.text[:500]
+        print(f"📥 RAW RESPONSE (500 chars): {raw_text}")
+
         if resp.status_code != 200:
             return None, f"HTTP {resp.status_code}: {resp.text[:100]}"
 
         content = extract_content_from_sse(resp.text)
         if not content:
-            return None, "Response kosong (mungkin error parsing)"
+            # Jika content kosong, coba ambil dari resp.text langsung (fallback)
+            content = extract_content_from_sse(resp.text)
+            if not content:
+                # Jika masih kosong, kembalikan raw text sebagai error
+                return None, f"Response kosong. Raw: {resp.text[:200]}"
 
         return content, None
 
@@ -361,7 +411,7 @@ async def chat_completions(
             # Lanjut ke akun berikutnya
 
     # Semua akun gagal
-    raise HTTPException(503, "Semua akun gagal. Cek log untuk detail.")
+    raise HTTPException(503, f"Semua akun gagal. Cek log untuk detail.")
 
 @app.get("/")
 async def root():
