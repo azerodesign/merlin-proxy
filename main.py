@@ -12,12 +12,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
+# Import daftar akun dari file terpisah
+from akun import ACCOUNTS
+
 load_dotenv()
 
 app = FastAPI(
-    title="Merlin Proxy",
-    description="OpenAI-compatible proxy for Merlin AI (with Tools support for Hermes)",
-    version="2.1.0"
+    title="Merlin Proxy Multi-Akun",
+    description="Proxy API Merlin ke format OpenAI dengan rotasi akun & auto-login",
+    version="3.0.0"
 )
 
 # =============== CORS ===============
@@ -30,15 +33,21 @@ app.add_middleware(
 )
 
 # =============== KONFIGURASI ===============
-AUTH_TOKEN = os.getenv("AUTH_TOKEN", "")
-MERLIN_API_URL = os.getenv("MERLIN_API_URL", "https://www.getmerlin.in/arcane/api/v2/thread/unified")
-MERLIN_EMAIL = os.getenv("MERLIN_EMAIL", "")
-MERLIN_PASSWORD = os.getenv("MERLIN_PASSWORD", "")
-FIREBASE_API_KEY = os.getenv("FIREBASE_API_KEY", "")
 PROXY_API_KEY = os.getenv("PROXY_API_KEY", "sk-9894908a-3827-446c-9769-cde7065b5b68")
+FIREBASE_API_KEY = os.getenv("FIREBASE_API_KEY", "AIzaSyAvCgtQ4XbmlQGIynDT-v_M8eLaXrKmtiM")
+MERLIN_API_URL = "https://www.getmerlin.in/arcane/api/v2/thread/unified"
+
+# Token storage per akun (index -> token)
+TOKENS = {}
+# Index terakhir yang dipakai untuk round-robin
+last_index = -1
 
 print("=" * 60)
-print("🔐 PROXY API KEY:", PROXY_API_KEY)
+print(f"🔐 PROXY API KEY: {PROXY_API_KEY}")
+print(f"👥 Total akun terdaftar: {len(ACCOUNTS)}")
+for i, acc in enumerate(ACCOUNTS):
+    proxy_status = "Ya" if acc.get("proxy") else "Tidak"
+    print(f"  {i+1}. {acc['email']} | Proxy: {proxy_status}")
 print("=" * 60)
 
 BASE_HEADERS = {
@@ -50,7 +59,7 @@ BASE_HEADERS = {
     "Referer": "https://www.getmerlin.in/id/chat"
 }
 
-# =============== MODEL LIST ===============
+# =============== DAFTAR MODEL ===============
 AVAILABLE_MODELS = [
     "gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4-turbo", "gpt-3.5-turbo",
     "o1-mini", "o3-mini",
@@ -80,14 +89,18 @@ def get_merlin_model(user_model: str) -> str:
     return MODEL_MAP.get(user_model, "claude-4.8-opus")
 
 # =============== AUTH ===============
-def verify_api_key(authorization: Optional[str] = Header(None), x_api_key: Optional[str] = Header(None, alias="X-API-Key")):
+def verify_api_key(
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key")
+):
     api_key = None
     if authorization and authorization.startswith("Bearer "):
         api_key = authorization[7:]
     elif x_api_key:
         api_key = x_api_key
+
     if not api_key:
-        raise HTTPException(status_code=401, detail="API Key required")
+        raise HTTPException(status_code=401, detail="API Key required. Provide 'Authorization: Bearer <key>' or 'X-API-Key: <key>'")
     if api_key != PROXY_API_KEY:
         raise HTTPException(status_code=403, detail="Invalid API Key")
     return api_key
@@ -103,91 +116,62 @@ class ChatCompletionRequest(BaseModel):
     temperature: Optional[float] = 0.7
     max_tokens: Optional[int] = 1000
     stream: Optional[bool] = False
-    tools: Optional[List[Dict[str, Any]]] = None          # <-- Tools dari Hermes
-    tool_choice: Optional[Dict[str, Any]] = None          # <-- Tool choice
 
-# =============== MERLIN FUNCTIONS ===============
-def generate_uuid():
+# =============== FUNGSI UTILITY ===============
+def generate_uuid() -> str:
     return str(uuid.uuid4())
 
-def login_to_merlin() -> str:
-    print("🔐 Mencoba login otomatis...")
-    if not MERLIN_EMAIL or not MERLIN_PASSWORD or not FIREBASE_API_KEY:
+def login_to_merlin(email: str, password: str, proxy_url: str = None) -> Optional[str]:
+    """Login ke Firebase Auth Merlin dan dapatkan token"""
+    print(f"🔐 Login: {email}")
+    if not email or not password:
         return None
+
     url = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
+    payload = {
+        "email": email,
+        "password": password,
+        "returnSecureToken": True
+    }
+
+    proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
+
     try:
         resp = requests.post(
             f"{url}?key={FIREBASE_API_KEY}",
-            json={"email": MERLIN_EMAIL, "password": MERLIN_PASSWORD, "returnSecureToken": True},
+            json=payload,
+            proxies=proxies,
             timeout=30
         )
         if resp.status_code == 200:
             token = resp.json().get("idToken")
             if token:
-                print("✅ Login berhasil")
+                print(f"✅ Login berhasil: {email}")
                 return token
+        else:
+            print(f"❌ Login gagal ({resp.status_code}): {resp.text[:100]}")
     except Exception as e:
-        print(f"❌ Login error: {e}")
+        print(f"❌ Error login: {e}")
     return None
 
-def get_headers_with_token(token=None):
+def get_headers_with_token(token: str) -> dict:
     headers = BASE_HEADERS.copy()
-    t = token or AUTH_TOKEN
-    if t:
-        headers["Authorization"] = f"Bearer {t}"
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     return headers
 
-def inject_tools_into_prompt(content: str, tools: List[Dict[str, Any]]) -> str:
-    """Tambahkan deskripsi tools ke dalam prompt user"""
-    if not tools:
-        return content
-    
-    tools_desc = "\n\n--- TOOLS YANG TERSEDIA ---\n"
-    for tool in tools:
-        if tool.get("type") == "function":
-            func = tool.get("function", {})
-            tools_desc += f"\n- Nama: {func.get('name')}\n"
-            tools_desc += f"  Deskripsi: {func.get('description', 'Tidak ada deskripsi')}\n"
-            parameters = func.get('parameters', {})
-            if parameters:
-                tools_desc += f"  Parameter: {json.dumps(parameters, indent=2, ensure_ascii=False)}\n"
-    
-    tools_desc += "\n--- INSTRUKSI ---\n"
-    tools_desc += "Jika kamu membutuhkan tool, jawab dengan format JSON:\n"
-    tools_desc += '{"tool_calls": [{"function": {"name": "nama_tool", "arguments": {...}}}]}\n'
-    tools_desc += "Jika tidak, jawab seperti biasa.\n"
-    
-    return content + tools_desc
-
 def build_merlin_payload(req: ChatCompletionRequest) -> Dict[str, Any]:
+    """Buat payload sesuai format yang diminta Merlin"""
     user_msgs = [m for m in req.messages if m.role == "user"]
-    system_msgs = [m for m in req.messages if m.role == "system"]
-    
-    if not user_msgs:
-        # fallback ke pesan terakhir
-        last = req.messages[-1]
-        content = last.content
-    else:
-        last = user_msgs[-1]
-        content = last.content
-    
-    # Inject tools ke content user
-    if req.tools:
-        content = inject_tools_into_prompt(content, req.tools)
-    
-    # Gabungkan system message jika ada
-    full_prompt = content
-    if system_msgs:
-        system_content = "\n".join([m.content for m in system_msgs])
-        full_prompt = f"[SYSTEM: {system_content}]\n\n{full_prompt}"
-    
+    last = user_msgs[-1] if user_msgs else req.messages[-1]
+
     return {
         "attachments": [],
         "chatId": generate_uuid(),
         "language": "AUTO",
         "message": {
             "childId": generate_uuid(),
-            "content": full_prompt,
+            "content": last.content,
             "context": "",
             "id": generate_uuid(),
             "parentId": "root"
@@ -206,151 +190,193 @@ def build_merlin_payload(req: ChatCompletionRequest) -> Dict[str, Any]:
     }
 
 def extract_content_from_sse(text: str) -> str:
+    """Ekstrak konten dari response SSE Merlin"""
     parts = []
-    for match in re.findall(r'data: ({.*?})\n', text, re.DOTALL):
+    pattern = r'data: ({.*?})\n'
+    for match in re.findall(pattern, text, re.DOTALL):
         try:
             data = json.loads(match)
+            if not isinstance(data, dict):
+                continue
+
+            # Coba berbagai level
             if 'data' in data and isinstance(data['data'], dict):
                 inner = data['data']
                 if inner.get('text'):
                     parts.append(inner['text'])
                 elif inner.get('content'):
                     parts.append(inner['content'])
+
             if data.get('text'):
                 parts.append(data['text'])
             elif data.get('content'):
                 parts.append(data['content'])
-        except:
+
+            if 'payload' in data and isinstance(data['payload'], dict):
+                if data['payload'].get('text'):
+                    parts.append(data['payload']['text'])
+
+        except json.JSONDecodeError:
             continue
+
     return ''.join(parts).strip()
 
-def call_merlin(payload):
-    global AUTH_TOKEN
-    for attempt in range(3):
-        headers = get_headers_with_token(AUTH_TOKEN)
+def call_merlin_with_account(index: int, payload: dict) -> tuple:
+    """
+    Panggil Merlin dengan akun ke-index.
+    Return: (content, error_message)
+    """
+    if index >= len(ACCOUNTS):
+        return None, "Akun tidak ditemukan"
+
+    acc = ACCOUNTS[index]
+    email = acc["email"]
+    proxy_url = acc.get("proxy")  # Bisa None
+
+    # Ambil atau login ulang
+    token = TOKENS.get(index)
+    if not token:
+        token = login_to_merlin(email, acc["password"], proxy_url)
+        if token:
+            TOKENS[index] = token
+        else:
+            return None, f"Gagal login: {email}"
+
+    headers = get_headers_with_token(token)
+    proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
+
+    try:
         resp = requests.post(
             MERLIN_API_URL,
             json=payload,
             headers=headers,
-            timeout=180,  # 3 menit
+            proxies=proxies,
+            timeout=180,
             stream=True
         )
-        if resp.status_code == 401:
-            print("⏰ Token expired, refresh...")
-            new = login_to_merlin()
-            if new:
-                AUTH_TOKEN = new
-                continue
-        return resp
-    raise HTTPException(502, "Gagal hubungi Merlin")
 
-# =============== STREAMING ===============
-async def stream_generator(payload, model):
-    resp = call_merlin(payload)
-    full_content = ""
-    for line in resp.iter_lines():
-        if line:
-            line = line.decode('utf-8')
-            if line.startswith('data: '):
-                try:
-                    data = json.loads(line[6:])
-                    if 'data' in data and isinstance(data['data'], dict):
-                        text = data['data'].get('text', '')
-                        if text:
-                            full_content += text
-                            chunk = {
-                                "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
-                                "object": "chat.completion.chunk",
-                                "created": int(time.time()),
-                                "model": model,
-                                "choices": [{
-                                    "index": 0,
-                                    "delta": {"content": text},
-                                    "finish_reason": None
-                                }]
-                            }
-                            yield f"data: {json.dumps(chunk)}\n\n"
-                except:
-                    pass
-    # Send final chunk
-    final = {
-        "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
-        "object": "chat.completion.chunk",
-        "created": int(time.time()),
-        "model": model,
-        "choices": [{
-            "index": 0,
-            "delta": {},
-            "finish_reason": "stop"
-        }]
-    }
-    yield f"data: {json.dumps(final)}\n\n"
-    yield "data: [DONE]\n\n"
+        # Token expired → refresh
+        if resp.status_code == 401:
+            print(f"⏰ Token expired: {email}, refresh...")
+            new_token = login_to_merlin(email, acc["password"], proxy_url)
+            if new_token:
+                TOKENS[index] = new_token
+                headers = get_headers_with_token(new_token)
+                resp = requests.post(
+                    MERLIN_API_URL,
+                    json=payload,
+                    headers=headers,
+                    proxies=proxies,
+                    timeout=180,
+                    stream=True
+                )
+            else:
+                return None, f"Refresh token gagal: {email}"
+
+        if resp.status_code != 200:
+            return None, f"HTTP {resp.status_code}: {resp.text[:100]}"
+
+        content = extract_content_from_sse(resp.text)
+        if not content:
+            return None, "Response kosong (mungkin error parsing)"
+
+        return content, None
+
+    except requests.exceptions.Timeout:
+        return None, "Timeout"
+    except requests.exceptions.ConnectionError:
+        return None, "Connection error"
+    except Exception as e:
+        return None, str(e)
+
+def get_next_account() -> int:
+    """Round-robin: ambil index akun berikutnya"""
+    global last_index
+    if not ACCOUNTS:
+        return -1
+    last_index = (last_index + 1) % len(ACCOUNTS)
+    return last_index
 
 # =============== ENDPOINTS ===============
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "accounts": len(ACCOUNTS)}
 
 @app.get("/v1/models")
 async def list_models(auth: str = Depends(verify_api_key)):
     return {
         "object": "list",
         "data": [
-            {"id": m, "object": "model", "created": 1700000000, "owned_by": "merlin-proxy"}
+            {
+                "id": m,
+                "object": "model",
+                "created": 1700000000,
+                "owned_by": "merlin-proxy"
+            }
             for m in AVAILABLE_MODELS
         ]
     }
 
 @app.post("/v1/chat/completions")
-async def chat_completions(req: ChatCompletionRequest, auth: str = Depends(verify_api_key)):
-    if req.stream:
+async def chat_completions(
+    req: ChatCompletionRequest,
+    auth: str = Depends(verify_api_key)
+):
+    # Coba akun dengan round-robin + failover
+    attempts = len(ACCOUNTS)
+    if attempts == 0:
+        raise HTTPException(503, "Tidak ada akun tersedia")
+
+    for _ in range(attempts):
+        idx = get_next_account()
+        if idx == -1:
+            break
+
         payload = build_merlin_payload(req)
-        return StreamingResponse(
-            stream_generator(payload, req.model),
-            media_type="text/event-stream"
-        )
-    else:
-        payload = build_merlin_payload(req)
-        resp = call_merlin(payload)
-        content = extract_content_from_sse(resp.text)
-        if not content:
-            content = "Maaf, tidak dapat memproses permintaan."
-        
-        # Kirim response format OpenAI (tanpa tool_calls)
-        return {
-            "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
-            "object": "chat.completion",
-            "created": int(time.time()),
-            "model": req.model,
-            "choices": [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": content
-                },
-                "finish_reason": "stop"
-            }],
-            "usage": {
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0
+        content, error = call_merlin_with_account(idx, payload)
+
+        if content:
+            # Sukses
+            return {
+                "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": req.model,
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": content
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0
+                }
             }
-        }
+        else:
+            print(f"❌ Akun {idx+1} gagal: {error}")
+            # Lanjut ke akun berikutnya
+
+    # Semua akun gagal
+    raise HTTPException(503, "Semua akun gagal. Cek log untuk detail.")
 
 @app.get("/")
 async def root():
     return {
-        "message": "Merlin Proxy running",
+        "message": "Merlin Proxy Multi-Akun running",
         "endpoints": {
             "health": "/health",
             "models": "/v1/models",
             "chat": "/v1/chat/completions"
         },
         "auth": "Bearer token or X-API-Key header",
-        "tools_support": "Tools are injected as prompt context (not native function calling)"
+        "accounts": len(ACCOUNTS)
     }
 
+# =============== MAIN ===============
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
