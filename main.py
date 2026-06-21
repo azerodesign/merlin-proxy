@@ -12,7 +12,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# Import daftar akun dari file terpisah
 from akun import ACCOUNTS
 
 load_dotenv()
@@ -20,7 +19,7 @@ load_dotenv()
 app = FastAPI(
     title="Merlin Proxy Multi-Akun",
     description="Proxy API Merlin ke format OpenAI dengan rotasi akun & auto-login",
-    version="3.1.0"
+    version="3.0.0"
 )
 
 # =============== CORS ===============
@@ -37,9 +36,7 @@ PROXY_API_KEY = os.getenv("PROXY_API_KEY", "sk-9894908a-3827-446c-9769-cde7065b5
 FIREBASE_API_KEY = os.getenv("FIREBASE_API_KEY", "AIzaSyAvCgtQ4XbmlQGIynDT-v_M8eLaXrKmtiM")
 MERLIN_API_URL = "https://www.getmerlin.in/arcane/api/v2/thread/unified"
 
-# Token storage per akun (index -> token)
 TOKENS = {}
-# Index terakhir yang dipakai untuk round-robin
 last_index = -1
 
 print("=" * 60)
@@ -122,7 +119,6 @@ def generate_uuid() -> str:
     return str(uuid.uuid4())
 
 def login_to_merlin(email: str, password: str, proxy_url: str = None) -> Optional[str]:
-    """Login ke Firebase Auth Merlin dan dapatkan token"""
     print(f"🔐 Login: {email}")
     if not email or not password:
         return None
@@ -161,7 +157,6 @@ def get_headers_with_token(token: str) -> dict:
     return headers
 
 def build_merlin_payload(req: ChatCompletionRequest) -> Dict[str, Any]:
-    """Buat payload sesuai format yang diminta Merlin"""
     user_msgs = [m for m in req.messages if m.role == "user"]
     last = user_msgs[-1] if user_msgs else req.messages[-1]
 
@@ -190,13 +185,10 @@ def build_merlin_payload(req: ChatCompletionRequest) -> Dict[str, Any]:
     }
 
 def extract_content_from_sse(text: str) -> str:
-    """
-    Ekstrak konten dari response SSE Merlin dengan berbagai fallback.
-    """
-    # Coba pola: event: message ... data: {...}
     parts = []
-    pattern_event = r'event: message\s+data: ({.*?})\n'
-    matches = re.findall(pattern_event, text, re.DOTALL)
+    # Coba pola: event: message ... data: {...}
+    pattern = r'event: message\s+data: ({.*?})\n'
+    matches = re.findall(pattern, text, re.DOTALL)
     if matches:
         for match in matches:
             try:
@@ -217,34 +209,29 @@ def extract_content_from_sse(text: str) -> str:
         if result:
             return result
 
-    # Fallback: cari semua data: {...} tanpa event
-    pattern_data = r'data: ({.*?})\n'
-    for match in re.findall(pattern_data, text, re.DOTALL):
+    # Fallback: cari semua data: {...}
+    pattern2 = r'data: ({.*?})\n'
+    for match in re.findall(pattern2, text, re.DOTALL):
         try:
             data = json.loads(match)
-            if not isinstance(data, dict):
-                continue
-            if 'data' in data and isinstance(data['data'], dict):
-                inner = data['data']
-                if inner.get('text'):
-                    parts.append(inner['text'])
-                elif inner.get('content'):
-                    parts.append(inner['content'])
-            if data.get('text'):
-                parts.append(data['text'])
-            elif data.get('content'):
-                parts.append(data['content'])
-            if 'payload' in data and isinstance(data['payload'], dict):
-                if data['payload'].get('text'):
-                    parts.append(data['payload']['text'])
-        except json.JSONDecodeError:
+            if isinstance(data, dict):
+                if 'data' in data and isinstance(data['data'], dict):
+                    inner = data['data']
+                    if inner.get('text'):
+                        parts.append(inner['text'])
+                    elif inner.get('content'):
+                        parts.append(inner['content'])
+                if data.get('text'):
+                    parts.append(data['text'])
+                elif data.get('content'):
+                    parts.append(data['content'])
+        except:
             continue
-
     result = ''.join(parts).strip()
     if result:
         return result
 
-    # Fallback terakhir: jika response adalah JSON biasa (bukan SSE)
+    # Fallback terakhir: coba parse sebagai JSON
     try:
         data = json.loads(text)
         if isinstance(data, dict):
@@ -254,28 +241,19 @@ def extract_content_from_sse(text: str) -> str:
                 return data['content']
             if 'text' in data:
                 return data['text']
-            if 'choices' in data and isinstance(data['choices'], list):
-                for choice in data['choices']:
-                    if 'message' in choice and 'content' in choice['message']:
-                        return choice['message']['content']
     except:
         pass
 
     return ""
 
 def call_merlin_with_account(index: int, payload: dict) -> tuple:
-    """
-    Panggil Merlin dengan akun ke-index.
-    Return: (content, error_message)
-    """
     if index >= len(ACCOUNTS):
         return None, "Akun tidak ditemukan"
 
     acc = ACCOUNTS[index]
     email = acc["email"]
-    proxy_url = acc.get("proxy")  # Bisa None
+    proxy_url = acc.get("proxy")
 
-    # Ambil atau login ulang
     token = TOKENS.get(index)
     if not token:
         token = login_to_merlin(email, acc["password"], proxy_url)
@@ -297,7 +275,6 @@ def call_merlin_with_account(index: int, payload: dict) -> tuple:
             stream=True
         )
 
-        # Token expired → refresh
         if resp.status_code == 401:
             print(f"⏰ Token expired: {email}, refresh...")
             new_token = login_to_merlin(email, acc["password"], proxy_url)
@@ -315,20 +292,15 @@ def call_merlin_with_account(index: int, payload: dict) -> tuple:
             else:
                 return None, f"Refresh token gagal: {email}"
 
-        # Debug: cetak raw response
-        raw_text = resp.text[:500]
-        print(f"📥 RAW RESPONSE (500 chars): {raw_text}")
-
         if resp.status_code != 200:
             return None, f"HTTP {resp.status_code}: {resp.text[:100]}"
 
+        # DEBUG: print raw response
+        print("📥 RAW RESPONSE (300 chars):", resp.text[:300])
+
         content = extract_content_from_sse(resp.text)
         if not content:
-            # Jika content kosong, coba ambil dari resp.text langsung (fallback)
-            content = extract_content_from_sse(resp.text)
-            if not content:
-                # Jika masih kosong, kembalikan raw text sebagai error
-                return None, f"Response kosong. Raw: {resp.text[:200]}"
+            return None, "Response kosong (mungkin error parsing)"
 
         return content, None
 
@@ -340,7 +312,6 @@ def call_merlin_with_account(index: int, payload: dict) -> tuple:
         return None, str(e)
 
 def get_next_account() -> int:
-    """Round-robin: ambil index akun berikutnya"""
     global last_index
     if not ACCOUNTS:
         return -1
@@ -372,7 +343,6 @@ async def chat_completions(
     req: ChatCompletionRequest,
     auth: str = Depends(verify_api_key)
 ):
-    # Coba akun dengan round-robin + failover
     attempts = len(ACCOUNTS)
     if attempts == 0:
         raise HTTPException(503, "Tidak ada akun tersedia")
@@ -386,7 +356,6 @@ async def chat_completions(
         content, error = call_merlin_with_account(idx, payload)
 
         if content:
-            # Sukses
             return {
                 "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
                 "object": "chat.completion",
@@ -408,10 +377,8 @@ async def chat_completions(
             }
         else:
             print(f"❌ Akun {idx+1} gagal: {error}")
-            # Lanjut ke akun berikutnya
 
-    # Semua akun gagal
-    raise HTTPException(503, f"Semua akun gagal. Cek log untuk detail.")
+    raise HTTPException(503, "Semua akun gagal. Cek log untuk detail.")
 
 @app.get("/")
 async def root():
