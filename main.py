@@ -35,12 +35,9 @@ MERLIN_PASSWORD = os.getenv("MERLIN_PASSWORD", "")
 FIREBASE_API_KEY = os.getenv("FIREBASE_API_KEY", "")
 PROXY_API_KEY = os.getenv("PROXY_API_KEY", "sk-9894908a-3827-446c-9769-cde7065b5b68")
 
-# Tampilkan API key di log startup (untuk Railway)
 print("=" * 60)
 print("🔐 PROXY API KEY (gunakan untuk autentikasi):")
 print(f"   {PROXY_API_KEY}")
-print("=" * 60)
-print("📌 Cara pakai: kirim header 'X-API-Key' atau 'Authorization: Bearer <key>'")
 print("=" * 60)
 
 BASE_HEADERS = {
@@ -53,7 +50,6 @@ BASE_HEADERS = {
 }
 
 # =============== MODEL ===============
-# Daftar model yang tersedia (dari model.py)
 AVAILABLE_MODELS = [
     "gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4-turbo", "gpt-3.5-turbo",
     "o1-mini", "o3-mini",
@@ -122,7 +118,6 @@ class ChatCompletionRequest(BaseModel):
 
 # =============== AUTH ===============
 def verify_api_key(authorization: Optional[str] = Header(None), x_api_key: Optional[str] = Header(None, alias="X-API-Key")):
-    # Coba dari Authorization: Bearer <key>
     api_key = None
     if authorization and authorization.startswith("Bearer "):
         api_key = authorization[7:]
@@ -179,13 +174,14 @@ def build_merlin_payload(openai_req: ChatCompletionRequest) -> Dict[str, Any]:
     chat_id = generate_uuid()
     message_id = generate_uuid()
     child_id = generate_uuid()
+    
     return {
         "attachments": [],
         "chatId": chat_id,
         "language": "AUTO",
         "message": {
             "childId": child_id,
-            "content": last_user_msg.content,
+            "content": last_user_msg.content,  # <-- Input teks apa pun dari user
             "context": "",
             "id": message_id,
             "parentId": "root"
@@ -204,6 +200,7 @@ def build_merlin_payload(openai_req: ChatCompletionRequest) -> Dict[str, Any]:
     }
 
 def extract_content_from_sse(response_text: str) -> str:
+    """Ekstrak konten dari SSE"""
     content_parts = []
     pattern = r'data: ({.*?})\n'
     for match in re.findall(pattern, response_text, re.DOTALL):
@@ -268,7 +265,6 @@ async def health():
 
 @app.get("/v1/models")
 async def list_models(auth: str = Depends(verify_api_key)):
-    """Endpoint untuk list model (OpenAI compatible)"""
     return {
         "object": "list",
         "data": [
@@ -284,6 +280,9 @@ async def list_models(auth: str = Depends(verify_api_key)):
 
 @app.post("/v1/chat/completions")
 async def chat_completions(body: ChatCompletionRequest, auth: str = Depends(verify_api_key)):
+    # Force non-streaming agar kompatibel dengan semua client
+    body.stream = False
+    
     payload = build_merlin_payload(body)
     print("📤 Payload:", json.dumps(payload, indent=2)[:500])
     
@@ -316,7 +315,6 @@ async def chat_completions(body: ChatCompletionRequest, auth: str = Depends(veri
         }
     }
 
-# =============== ROOT ===============
 @app.get("/")
 async def root():
     return {
